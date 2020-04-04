@@ -4,7 +4,6 @@ import numpy as np
 class NeuralNet:
     """
     Implements simple neural net
-    
     Arguments: 
     layer_dims -- list of dimensions for each layer
     lr -- learning rate for gradient descent
@@ -28,7 +27,6 @@ class NeuralNet:
         Arguments:
         Y_true -- vector of true labels for training set, shape(1, number of examples)
         Y_pred -- probability vector corresponding to label predictions, shape(1, number of examples)
-
         Returns:
         cost -- cross entropy cost
         """
@@ -45,25 +43,17 @@ class NeuralNet:
         
         return A
     
-
+    def leaky_relu(self, Z):
+        '''Leaky ReLU function'''
+    
+        A = np.where(Z >= 0, Z, Z*0.01)
+        assert(A.shape == Z.shape)
+    
+        return A
+    
     def sigmoid(self, Z):
         """Sigmoid function"""
         return 1/(1 + np.exp(-Z))
-
-    '''
-    def relu_backward(self, dA, Z):
-
-        def relu_derivative(Z):
-            if Z < 0:
-                return 0
-            elif Z >= 0:
-                return 1
-            
-        vec_derivative = np.vectorize(relu_derivative)
-
-        dZ = np.multiply(dA, vec_derivative(Z))
-        return dZ
-    '''
     
     def relu_backward(self, dA, Z):
         """
@@ -82,6 +72,21 @@ class NeuralNet:
 
         assert (dZ.shape == Z.shape)
 
+        return dZ
+    
+    def lrelu_backward(self, dA, Z):
+        """
+        Implement the backward propagation for a single Leaky ReLU unit.
+        Arguments:
+        dA -- post-activation gradient, of any shape
+        cache -- 'Z' where we store for computing backward propagation efficiently
+        Returns:
+        dZ -- Gradient of the cost with respect to Z
+        """
+        
+        derivative = np.where(Z >= 0, 1, 0.01)
+        dZ = np.multiply(dA, derivative)
+        
         return dZ
 
     def sigmoid_backward(self, dA, Z):
@@ -111,7 +116,7 @@ class NeuralNet:
         print("{} layers".format(L))
 
         for l in np.arange(1, L):
-            params['W' + str(l)] = np.random.randn(n[l], n[l-1])*0.01  # multiplying all values to train NN faster
+            params['W' + str(l)] = np.random.randn(n[l], n[l-1])*0.001  # multiplying all values to train NN faster
             params['b' + str(l)] = np.zeros((n[l], 1))
             
             assert(params['W' + str(l)].shape == (n[l], n[l - 1]))
@@ -119,14 +124,35 @@ class NeuralNet:
 
         return params
     
+    def init_dropout(self, keep_prob, m):
+        """
+        Initializes dropout matrices.
+        Arguments:
+        keep_prob -- list with probabilities of keeping unit for each hidden layer
+        m -- number of examples in train set
+        Returns:
+        D -- dictionary with dropout matrices for every hidden layer
+        keep_prob -- list with probabilities of keeping unit for each hidden layer
+        """
+        
+        D = {}
+        L = len(self.layer_dims)
+        
+        for l in range(L):
+            
+            D[str(l)] = np.random.rand(self.layer_dims[l], m)
+            D[str(l)] = D[str(l)] < keep_prob[l]
+            
+            assert(D[str(l)].shape == (self.layer_dims[l], m))
+            
+        return D, keep_prob
     
-    def L_model_forward(self, X, parameters):
+    def L_model_forward(self, X, parameters, dropout_params, mode):
         """
         Implements forward propagation part of L layer Neural Net
         Arguments:
         X -- input data
         parameters -- dictionary with weights and biases for every layer
-
         Returns:
         AL -- activations from the last layer
         caches -- linear caches for every layer
@@ -135,12 +161,10 @@ class NeuralNet:
         def linear_forward(A_prev, W, b):
             """
             Linear part of forward propagation.
-
             Arguments:
             A_prev -- activations from previous layer or input(X)
             W -- weights for current layer
             b -- biases for current layer
-
             Returns:
             Z -- the input for the activation function
             cache -- dictionary containing A_prev, W and b
@@ -157,13 +181,11 @@ class NeuralNet:
         def activation_forward(A_prev, W, b, activation):
             """
             Forward propagation for activation part of layer
-
             Arguments:
             A_prev -- activations from previous layer or input(X)
             W -- weights for current layer
             b -- biases for current layer
             activtion -- activation function to use in this layer
-
             Returns:
             A -- activations from this layer
             cache -- tuple containing values of A_prev and calculated in this layer W, b, Z
@@ -176,21 +198,34 @@ class NeuralNet:
                 
             elif activation == 'Sigmoid':
                 A = self.sigmoid(Z)
+                
+            elif activation == 'Leaky ReLU':
+                A = self.leaky_relu(Z)
 
             assert (A.shape == (W.shape[0], A_prev.shape[1]))
             cache = (linear_cache, Z)
 
             return A, cache
-
+        
+        if mode == 'train':
+            D, keep_prob = dropout_params
+            
         caches = []
         A = X
 
         L = len(parameters)//2
 
         for l in range(1, L):
+            
             A_prev = A
-            A, cache = activation_forward(A_prev, parameters['W' + str(l)], parameters['b' + str(l)], 'ReLU')
+            A, cache = activation_forward(A_prev, parameters['W' + str(l)], parameters['b' + str(l)], 'Leaky ReLU')
+            
+            if mode == 'train':
+                A = np.multiply(A, D[str(l)])
+                A /= keep_prob[l]
+                
             caches.append(cache)
+            
             """
             print('{} layer forwardpropagated'.format(l))
             print('A_prev shape: {}'.format(cache[0][0].shape))
@@ -198,6 +233,11 @@ class NeuralNet:
             print('b shape: {}'.format(cache[0][2].shape))
             """
         AL, cache = activation_forward(A, parameters['W' + str(L)], parameters['b' + str(L)], 'Sigmoid')
+        
+        if mode == 'train':
+            AL = np.multiply(AL, D[str(L)])
+            AL /= keep_prob[L]
+            
         caches.append(cache)
         """
         print('{} layer forwardpropagated'.format(L))
@@ -211,14 +251,13 @@ class NeuralNet:
         return AL, caches
     
     
-    def L_model_backward(self, AL, Y, caches):
+    def L_model_backward(self, AL, Y, caches, dropout_params):
         """
         Implements backward propagation part of L layer Neural Net
         Arguments:
         AL -- activation of the last layer
         Y -- true labels for data X
         caches -- list of caches for every layer
-
         Returns:
         grads -- A dictionary with the gradients
                  grads["dA" + str(l)] = ... 
@@ -228,11 +267,9 @@ class NeuralNet:
         def linear_back(dZ, cache):
             """
             Back propagation for linear section of layer
-
             Arguments:
             dZ -- Gradient of the cost function w.r.t linear output of current layer
             cache -- tuple of A_prev, W, b values used in this layer
-
             Returns:
             dA_prev -- Gradient of the co w.r.t activations fom previous layer
             dW -- Gradient of the cost w.r.t weights
@@ -255,12 +292,10 @@ class NeuralNet:
         def activation_back(dA, cache, activation):
             """
             Backpropagation for the activation part of the current layer
-
             Arguments:
             dA -- Gradient wrt activations of the current layer
             cache -- A_prev, W, b, Z for current layer
             activation -- activation function to use in this layer
-
             Returns:
             dA_prev -- Gradient of the cost wrt the activation of the previous layer
             dW -- Gradient of the cost wrt W (current layer l), same shape as W
@@ -272,9 +307,11 @@ class NeuralNet:
             if activation == 'ReLU':
                 dZ = self.relu_backward(dA, Z)
                 #print("dZ shape: {}".format(dZ.shape))
-            if activation == 'Sigmoid':
+            elif activation == 'Sigmoid':
                 dZ = self.sigmoid_backward(dA, Z)
                 #print("dZ shape: {}".format(dZ.shape))
+            elif activation == 'Leaky ReLU':
+                dZ = self.lrelu_backward(dA, Z)
             
 
             dA_prev, dW, db = linear_back(dZ, linear_cache)
@@ -283,13 +320,15 @@ class NeuralNet:
 
             return dA_prev, dW, db
         
-        
+        D, keep_prob = dropout_params
         grads = {}
         L = len(caches)
         Y = Y.reshape(AL.shape)
         m = AL.shape[1]
 
         dAL = -(np.divide(Y, AL) - np.divide(1 - Y, 1 - AL))
+        dAL = np.multiply(dAL, D[str(L)])
+        dAL /= keep_prob[L]
 
         grads['dA' + str(L)], grads['dW' + str(L)], grads['db' + str(L)] = activation_back(dAL,
                                                                                            caches[-1],
@@ -299,7 +338,10 @@ class NeuralNet:
         for l in reversed(range(L-1)):
             grads['dA' + str(l+1)], grads['dW' + str(l+1)], grads['db' + str(l+1)] = activation_back(grads['dA' + str(l+2)],
                                                                                                caches[l],
-                                                                                               'ReLU')
+                                                                                               'Leaky ReLU')
+            grads['dA' + str(l+1)] = np.multiply(grads['dA' + str(l+1)], D[str(l)])
+            grads['dA' + str(l+1)] /= keep_prob[l+1]
+            
             #print("{} layer backpropagated".format(l+1))
         return grads
     
@@ -311,7 +353,6 @@ class NeuralNet:
         parameters -- dictionary with parameters for every layer
         grads -- dictionary with gradients for every layer
         lr -- learning rate for gradient descent
-
         Returns:
         parameters -- dictionary of updated parameters
         """
@@ -334,46 +375,52 @@ class NeuralNet:
         """
         
         parameters = self.init_params(self.layer_dims)
+        dropout_params = self.init_dropout(keep_prob, X_train.shape[1])
         costs = []
         
         for i in range(self.num_iterations):
             
-            AL, caches = self.L_model_forward(X_train, parameters)
+            AL, caches = self.L_model_forward(X_train, parameters, mode='train', dropout_params=dropout_params)
             cost = self.cost_function(Y_train, AL)
-            grads = self.L_model_backward(AL, Y_train, caches)
+            grads = self.L_model_backward(AL, Y_train, caches, dropout_params)
             parameters = self.update_params(parameters, grads, self.lr)
             
             if self.print_cost and i % 100 == 0:
+                print('AL: {}'.format(AL))
                 print('Cost after ' + str(i) + 'th iteration: {}'.format(cost))
                 costs.append(cost)
             
+        plt.plot(costs)
+        plt.xlabel("Iteration (per hundreds)")
+        plt.ylabel("Cost")
+        plt.title(f"Cost curve for the learning rate = {self.lr}")
+        
         self.trained_params = parameters
         self.fitted = True
+        return parameters
             
-    def predict(self, X, y):
+    def predict(self, X):
         """
         This function is used to predict the results of a  L-layer neural network.
-
         Arguments:
         X -- data set of examples you would like to label
         parameters -- parameters of the trained model
-
         Returns:
         p -- predictions for the given dataset X
         """
 
         m = X.shape[1]
-        p = np.zeros((1,m))
+        y = np.zeros((1,m))
 
         # Forward propagation
-        probas, caches = L_model_forward(X, self.trained_params)
+        probas, caches = self.L_model_forward(X, self.trained_params, mode='test', dropout_params=[0,0])
 
 
         # convert probas to 0/1 predictions
-        for i in range(0, probas.shape[1]):
+        for i in range(probas.shape[1]):
             if probas[0,i] > 0.5:
-                p[0,i] = 1
+                y[0,i] = 1
             else:
-                p[0,i] = 0
+                y[0,i] = 0
 
-        return p
+        return y, probas
