@@ -12,26 +12,38 @@ class NeuralNet:
     """
     
     
-    def __init__(self, layer_dims, lr=0.0075, num_iterations=3000, print_cost=True):
+    def __init__(self, layer_dims, lr=0.0075, num_iterations=3000, lambd=0.1, print_cost=True):
         
         self.layer_dims = layer_dims
         self.lr = lr
         self.num_iterations = num_iterations
+        self.lambd = lambd
         self.print_cost = print_cost
         self.trained_params = {}
         self.fitted = False
         
     
-    def cost_function(self, Y_true, Y_pred):
+    def compute_cost(self, Y_true, Y_pred, parameters):
         """
         Arguments:
         Y_true -- vector of true labels for training set, shape(1, number of examples)
         Y_pred -- probability vector corresponding to label predictions, shape(1, number of examples)
+        parameters -- dictionary containing all weights and biases
         Returns:
         cost -- cross entropy cost
         """
         m = Y_true.shape[1]  # number of examples
-        J = -(1/m)*np.sum(Y_true*np.log(Y_pred) + (1 - Y_true)*np.log(1-Y_pred))
+        L = len(parameters) // 2
+        
+        cross_entropy = -(1/m)*np.sum(Y_true*np.log(Y_pred) + (1 - Y_true)*np.log(1-Y_pred))
+        
+        L2_norm = 0
+        for l in range(L):
+            L2_norm += np.sum(np.square(parameters['W' + str(l + 1)]))
+            
+        L2_regularization = (self.lambd/(2*m))*L2_norm
+        J = cross_entropy + L2_regularization
+        
         return J
 
 
@@ -146,6 +158,41 @@ class NeuralNet:
             assert(D[str(l)].shape == (self.layer_dims[l], m))
             
         return D, keep_prob
+    
+    def init_mini_batches(self, X, y, mb_size=64):
+        """
+        Initialize mini batches of data with given size
+        Arguments:
+        X -- train data(pandas DataFrame)
+        y -- true labels of data X(pandas Series)
+        mb_size -- mini batch size
+        Return:
+        mini_batches -- list of tuples(X_mini_batch, y_mini_batch)
+        """
+        
+        m = X.shape[1]
+        mini_batches = []
+        
+        permutation = list(np.random.permutation(X.columns))
+        shuffled_X = X.loc[:, permutation].to_numpy()
+        shuffled_y = y[permutation].to_numpy().reshape((1,m))
+        
+        num_batches = int(np.floor(m/mb_size))
+        
+        for n in range(num_batches):
+            mini_batch_X = shuffled_X[:, n*mb_size:(n + 1)*mb_size]
+            mini_batch_y = shuffled_y[:, n*mb_size:(n + 1)*mb_size]
+            mini_batch = (mini_batch_X, mini_batch_y)
+            mini_batches.append(mini_batch)
+            
+        if m % mb_size != 0:
+            mini_batch_X = shuffled_X[:,num_batches * mb_size:]
+            mini_batch_y = shuffled_y[:,num_batches * mb_size:]
+            mini_batch = (mini_batch_X, mini_batch_y)
+            mini_batches.append(mini_batch)
+            
+        return mini_batches
+        
     
     def L_model_forward(self, X, parameters, dropout_params, mode):
         """
@@ -279,7 +326,7 @@ class NeuralNet:
             A_prev, W, b = cache
             m = A_prev.shape[1]
 
-            dW = np.dot(dZ, A_prev.T)/m
+            dW = np.dot(dZ, A_prev.T)/m + (self.lambd * W)/m
             db = np.sum(dZ, axis=1, keepdims=True)/m
             dA_prev = np.dot(W.T, dZ)
             
@@ -366,7 +413,7 @@ class NeuralNet:
         return parameters
     
     
-    def fit(self, X_train, Y_train):
+    def fit(self, X_train, Y_train, mb_size=64):
         """
         Trains the NN for classification
         Arguments:
@@ -375,18 +422,21 @@ class NeuralNet:
         """
         
         parameters = self.init_params(self.layer_dims)
-        dropout_params = self.init_dropout(keep_prob, X_train.shape[1])
+        mini_batches = self.init_mini_batches(X_train, Y_train, mb_size)
         costs = []
         
         for i in range(self.num_iterations):
             
-            AL, caches = self.L_model_forward(X_train, parameters, mode='train', dropout_params=dropout_params)
-            cost = self.cost_function(Y_train, AL)
-            grads = self.L_model_backward(AL, Y_train, caches, dropout_params)
-            parameters = self.update_params(parameters, grads, self.lr)
+            for b in range(len(mini_batches)):
+                
+                X_train, Y_train = mini_batches[b]
+                dropout_params = self.init_dropout(keep_prob, X_train.shape[1])
+                AL, caches = self.L_model_forward(X_train, parameters, mode='train', dropout_params=dropout_params)
+                cost = self.compute_cost(Y_train, AL, parameters)
+                grads = self.L_model_backward(AL, Y_train, caches, dropout_params)
+                parameters = self.update_params(parameters, grads, self.lr)
             
             if self.print_cost and i % 100 == 0:
-                print('AL: {}'.format(AL))
                 print('Cost after ' + str(i) + 'th iteration: {}'.format(cost))
                 costs.append(cost)
             
