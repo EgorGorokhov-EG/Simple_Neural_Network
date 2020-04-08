@@ -1,9 +1,9 @@
 import numpy as np
-
+import cupy as cp
 
 class NeuralNet:
     """
-    Implements simple neural net
+    Implements neural net
     Arguments: 
     layer_dims -- list of dimensions for each layer
     lr -- learning rate for gradient descent
@@ -12,12 +12,13 @@ class NeuralNet:
     """
     
     
-    def __init__(self, layer_dims, lr=0.0075, num_iterations=3000, lambd=0.1, print_cost=True):
+    def __init__(self, layer_dims, lr=0.0075, num_epochs=200, lambd=0.1, beta=0.9,  print_cost=True):
         
         self.layer_dims = layer_dims
         self.lr = lr
-        self.num_iterations = num_iterations
+        self.num_epochs = num_epochs
         self.lambd = lambd
+        self.beta = beta
         self.print_cost = print_cost
         self.trained_params = {}
         self.fitted = False
@@ -35,11 +36,11 @@ class NeuralNet:
         m = Y_true.shape[1]  # number of examples
         L = len(parameters) // 2
         
-        cross_entropy = -(1/m)*np.sum(Y_true*np.log(Y_pred) + (1 - Y_true)*np.log(1-Y_pred))
+        cross_entropy = -(1/m)*cp.sum(Y_true*cp.log(Y_pred) + (1 - Y_true)*cp.log(1-Y_pred))
         
         L2_norm = 0
         for l in range(L):
-            L2_norm += np.sum(np.square(parameters['W' + str(l + 1)]))
+            L2_norm += cp.sum(cp.square(parameters['W' + str(l + 1)]))
             
         L2_regularization = (self.lambd/(2*m))*L2_norm
         J = cross_entropy + L2_regularization
@@ -50,7 +51,7 @@ class NeuralNet:
     def relu(self, Z):
         """ReLU function"""
         
-        A = np.maximum(0, Z)
+        A = cp.maximum(0, Z)
         assert(A.shape == Z.shape)
         
         return A
@@ -58,14 +59,14 @@ class NeuralNet:
     def leaky_relu(self, Z):
         '''Leaky ReLU function'''
     
-        A = np.where(Z >= 0, Z, Z*0.01)
+        A = cp.where(Z >= 0, Z, Z*0.01)
         assert(A.shape == Z.shape)
     
         return A
     
     def sigmoid(self, Z):
         """Sigmoid function"""
-        return 1/(1 + np.exp(-Z))
+        return 1/(1 + cp.exp(-Z))
     
     def relu_backward(self, dA, Z):
         """
@@ -77,7 +78,7 @@ class NeuralNet:
         dZ -- Gradient of the cost with respect to Z
         """
 
-        dZ = np.array(dA, copy=True) # just converting dz to a correct object.
+        dZ = cp.array(dA, copy=True) # just converting dz to a correct object.
 
         # When z <= 0, you should set dz to 0 as well. 
         dZ[Z <= 0] = 0
@@ -96,17 +97,17 @@ class NeuralNet:
         dZ -- Gradient of the cost with respect to Z
         """
         
-        derivative = np.where(Z >= 0, 1, 0.01)
-        dZ = np.multiply(dA, derivative)
+        derivative = cp.where(Z >= 0, 1, 0.01)
+        dZ = cp.multiply(dA, derivative)
         
         return dZ
 
     def sigmoid_backward(self, dA, Z):
 
         def sigmoid_derivative(Z):
-             return np.multiply(self.sigmoid(Z), (1 - self.sigmoid(Z)))
+             return cp.multiply(self.sigmoid(Z), (1 - self.sigmoid(Z)))
 
-        dZ = np.multiply(dA, sigmoid_derivative(Z))
+        dZ = cp.multiply(dA, sigmoid_derivative(Z))
         return dZ
     
     
@@ -124,18 +125,39 @@ class NeuralNet:
         """
 
         params = {}
+        
         L = len(n)  # number of layers in NN
-        print("{} layers".format(L))
 
         for l in np.arange(1, L):
-            params['W' + str(l)] = np.random.randn(n[l], n[l-1])*0.001  # multiplying all values to train NN faster
-            params['b' + str(l)] = np.zeros((n[l], 1))
+            params['W' + str(l)] = cp.random.randn(n[l], n[l-1])*0.001
+            params['b' + str(l)] = cp.zeros((n[l], 1))
+            
+           
             
             assert(params['W' + str(l)].shape == (n[l], n[l - 1]))
             assert(params['b' + str(l)].shape == (n[l], 1))
 
         return params
     
+    def init_v(self, n):
+        """
+        Initialize dictionary to store the exponentially weighted average of the gradient
+        on previous steps for GD with momentum
+        Arguments:
+        n -- list with number of units in each layer
+        Returns:
+        v -- dictionary with values of v for weights and biases in each layer
+        """
+        
+        v = {}
+        L = len(n)
+        
+        for l in range(1, L):
+            v['dW' + str(l)] = cp.zeros((n[l], n[l-1]))
+            v['db' + str(l)] = cp.zeros((n[l], 1))
+            
+        return v
+
     def init_dropout(self, keep_prob, m):
         """
         Initializes dropout matrices.
@@ -152,7 +174,7 @@ class NeuralNet:
         
         for l in range(L):
             
-            D[str(l)] = np.random.rand(self.layer_dims[l], m)
+            D[str(l)] = cp.random.rand(self.layer_dims[l], m)
             D[str(l)] = D[str(l)] < keep_prob[l]
             
             assert(D[str(l)].shape == (self.layer_dims[l], m))
@@ -175,9 +197,11 @@ class NeuralNet:
         
         permutation = list(np.random.permutation(X.columns))
         shuffled_X = X.loc[:, permutation].to_numpy()
+        shuffled_X = cp.array(shuffled_X)
         shuffled_y = y[permutation].to_numpy().reshape((1,m))
+        shuffled_y = cp.array(shuffled_y)
         
-        num_batches = int(np.floor(m/mb_size))
+        num_batches = int(cp.floor(m/mb_size))
         
         for n in range(num_batches):
             mini_batch_X = shuffled_X[:, n*mb_size:(n + 1)*mb_size]
@@ -218,7 +242,7 @@ class NeuralNet:
 
             """
 
-            Z = np.dot(W, A_prev) + b
+            Z = cp.dot(W, A_prev) + b
             
             assert(Z.shape == (W.shape[0], A.shape[1]))
             cache = (A_prev, W, b)
@@ -268,7 +292,7 @@ class NeuralNet:
             A, cache = activation_forward(A_prev, parameters['W' + str(l)], parameters['b' + str(l)], 'Leaky ReLU')
             
             if mode == 'train':
-                A = np.multiply(A, D[str(l)])
+                A = cp.multiply(A, D[str(l)])
                 A /= keep_prob[l]
                 
             caches.append(cache)
@@ -282,7 +306,7 @@ class NeuralNet:
         AL, cache = activation_forward(A, parameters['W' + str(L)], parameters['b' + str(L)], 'Sigmoid')
         
         if mode == 'train':
-            AL = np.multiply(AL, D[str(L)])
+            AL = cp.multiply(AL, D[str(L)])
             AL /= keep_prob[L]
             
         caches.append(cache)
@@ -326,9 +350,9 @@ class NeuralNet:
             A_prev, W, b = cache
             m = A_prev.shape[1]
 
-            dW = np.dot(dZ, A_prev.T)/m + (self.lambd * W)/m
-            db = np.sum(dZ, axis=1, keepdims=True)/m
-            dA_prev = np.dot(W.T, dZ)
+            dW = cp.dot(dZ, A_prev.T)/m + (self.lambd * W)/m
+            db = cp.sum(dZ, axis=1, keepdims=True)/m
+            dA_prev = cp.dot(W.T, dZ)
             
             assert (dA_prev.shape == A_prev.shape)
             assert (dW.shape == W.shape)
@@ -373,8 +397,8 @@ class NeuralNet:
         Y = Y.reshape(AL.shape)
         m = AL.shape[1]
 
-        dAL = -(np.divide(Y, AL) - np.divide(1 - Y, 1 - AL))
-        dAL = np.multiply(dAL, D[str(L)])
+        dAL = -(cp.divide(Y, AL) - cp.divide(1 - Y, 1 - AL))
+        dAL = cp.multiply(dAL, D[str(L)])
         dAL /= keep_prob[L]
 
         grads['dA' + str(L)], grads['dW' + str(L)], grads['db' + str(L)] = activation_back(dAL,
@@ -386,31 +410,37 @@ class NeuralNet:
             grads['dA' + str(l+1)], grads['dW' + str(l+1)], grads['db' + str(l+1)] = activation_back(grads['dA' + str(l+2)],
                                                                                                caches[l],
                                                                                                'Leaky ReLU')
-            grads['dA' + str(l+1)] = np.multiply(grads['dA' + str(l+1)], D[str(l)])
+            grads['dA' + str(l+1)] = cp.multiply(grads['dA' + str(l+1)], D[str(l)])
             grads['dA' + str(l+1)] /= keep_prob[l+1]
             
             #print("{} layer backpropagated".format(l+1))
         return grads
     
 
-    def update_params(self, parameters, grads, lr):
+    def update_params(self, parameters, grads, v, lr):
         """
         Updates parametrs using gradient descent
         Arguments:
         parameters -- dictionary with parameters for every layer
         grads -- dictionary with gradients for every layer
         lr -- learning rate for gradient descent
+        v -- dictionary with the exponentially weighted averages of the gradient for W and b in each layer
         Returns:
-        parameters -- dictionary of updated parameters
+        parameters -- dictionary with updated parameters
+        v -- dictionary with updated Vs
         """
 
         L = len(parameters) // 2
 
         for l in range(L):
-            parameters['W' + str(l+1)] -= grads['dW' + str(l+1)]*lr
-            parameters['b' + str(l+1)] -= grads['db' + str(l+1)]*lr
+            
+            v['dW' + str(l+1)] = self.beta*v['dW' + str(l+1)] + (1 - self.beta)*grads['dW' + str(l+1)]
+            v["db" + str(l+1)] = self.beta*v["db" + str(l+1)] + (1 - self.beta)*grads['db' + str(l+1)]
+            
+            parameters['W' + str(l+1)] -= v['dW' + str(l+1)]*lr
+            parameters['b' + str(l+1)] -= v['db' + str(l+1)]*lr
 
-        return parameters
+        return parameters, v
     
     
     def fit(self, X_train, Y_train, mb_size=64):
@@ -422,26 +452,30 @@ class NeuralNet:
         """
         
         parameters = self.init_params(self.layer_dims)
+        v = self.init_v(self.layer_dims)
         mini_batches = self.init_mini_batches(X_train, Y_train, mb_size)
         costs = []
         
-        for i in range(self.num_iterations):
+        for i in range(self.num_epochs):
             
             for b in range(len(mini_batches)):
                 
                 X_train, Y_train = mini_batches[b]
+                
                 dropout_params = self.init_dropout(keep_prob, X_train.shape[1])
+                
                 AL, caches = self.L_model_forward(X_train, parameters, mode='train', dropout_params=dropout_params)
                 cost = self.compute_cost(Y_train, AL, parameters)
                 grads = self.L_model_backward(AL, Y_train, caches, dropout_params)
-                parameters = self.update_params(parameters, grads, self.lr)
+                
+                parameters, v = self.update_params(parameters, grads, v, self.lr)
             
-            if self.print_cost and i % 100 == 0:
-                print('Cost after ' + str(i) + 'th iteration: {}'.format(cost))
+            if self.print_cost and i % 10 == 0:
+                print('Cost after ' + str(i + 1) + 'th epoch: {}'.format(cost))
                 costs.append(cost)
             
         plt.plot(costs)
-        plt.xlabel("Iteration (per hundreds)")
+        plt.xlabel("Epochs (per tens)")
         plt.ylabel("Cost")
         plt.title(f"Cost curve for the learning rate = {self.lr}")
         
