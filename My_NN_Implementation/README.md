@@ -7,4 +7,5 @@ Currently this version of the NN doesn't perform properly and I'm working on it.
 - 3 activation functions: ReLU, Leaky ReLU and Sigmoid
 - L2 regularization
 - Dropout regularization(with tunable probability of keeping unit in a layer)
-- Mini-batch Gradient Descent available
+- Mini-batch Gradient Descent with momentum
+- GPU computation
