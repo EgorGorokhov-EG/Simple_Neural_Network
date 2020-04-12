@@ -9,3 +9,5 @@ Currently this version of the NN doesn't perform properly and I'm working on it.
 - Dropout regularization(with tunable probability of keeping unit in a layer)
 - Mini-batch Gradient Descent with momentum
 - GPU computation
+
+You can check a preformance of this implementation in a Jupyter Notebook in this folder.
